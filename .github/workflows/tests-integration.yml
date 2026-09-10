@@ -1,0 +1,91 @@
+name: Integration tests
+
+# Stage 3: components wired to their real neighbours.
+#   Failsafe (*IT) - Spring context and Hibernate against in-memory H2 in
+#   PostgreSQL compatibility mode: the @DataJpaTest derived queries, the service
+#   to repository to database write path, the real security filter chain through
+#   MockMvc, and a context wiring smoke test.
+#
+# This is also where the JaCoCo gate runs. `verify` executes Surefire again
+# before Failsafe on purpose: the gate scores the merged unit and IT coverage,
+# so both layers have to run in the same reactor for the numbers to be whole.
+# System tests stay out, gated behind the `system-tests` profile.
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    name: Failsafe integration tests and coverage gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: Run integration tests and coverage gate
+        run: ./mvnw -B -ntp verify
+
+      - name: Summarise coverage
+        if: always()
+        run: |
+          report=target/site/jacoco/jacoco.csv
+          if [ ! -f "$report" ]; then
+            echo "No coverage report was produced." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          line_min=$(sed -n 's|.*<jacoco.line.minimum>\(.*\)</jacoco.line.minimum>.*|\1|p' pom.xml)
+          branch_min=$(sed -n 's|.*<jacoco.branch.minimum>\(.*\)</jacoco.branch.minimum>.*|\1|p' pom.xml)
+
+          # jacoco.csv columns:
+          #  4 INSTRUCTION_MISSED  5 INSTRUCTION_COVERED
+          #  6 BRANCH_MISSED       7 BRANCH_COVERED
+          #  8 LINE_MISSED         9 LINE_COVERED
+          # 12 METHOD_MISSED      13 METHOD_COVERED
+          {
+            echo "## Coverage"
+            echo
+            awk -F, '
+              function pct(c, m) {
+                return (c + m) == 0 ? "n/a" : sprintf("%.1f%%", 100 * c / (c + m))
+              }
+              NR > 1 {
+                im += $4;  ic += $5
+                bm += $6;  bc += $7
+                lm += $8;  lc += $9
+                mm += $12; mc += $13
+              }
+              END {
+                print "| Metric | Covered | Missed | Coverage |"
+                print "|---|---|---|---|"
+                printf "| Lines | %d | %d | **%s** |\n", lc, lm, pct(lc, lm)
+                printf "| Branches | %d | %d | **%s** |\n", bc, bm, pct(bc, bm)
+                printf "| Instructions | %d | %d | %s |\n", ic, im, pct(ic, im)
+                printf "| Methods | %d | %d | %s |\n", mc, mm, pct(mc, mm)
+              }
+            ' "$report"
+
+            if [ -n "$line_min" ] && [ -n "$branch_min" ]; then
+              echo
+              echo "Lines and branches are the gated metrics: \`jacoco:check\` fails" \
+                   "the build below $line_min and $branch_min respectively."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload test reports and coverage
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: integration-test-reports
+          path: |
+            target/failsafe-reports/
+            target/site/jacoco/
+          retention-days: 7
+          if-no-files-found: ignore

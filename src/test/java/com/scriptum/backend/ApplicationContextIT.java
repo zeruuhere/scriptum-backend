@@ -29,7 +29,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 @SpringBootTest
 @DisplayName("Application context")
-class ScriptumBackendApplicationTests {
+class ApplicationContextIT {
 
     @Autowired
     private ApplicationContext context;

@@ -32,7 +32,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @AutoConfigureMockMvc
 @Transactional
 @DisplayName("Security filter chain")
-class SecurityIntegrationTest {
+class SecurityIT {
 
     @Autowired
     private MockMvc mockMvc;

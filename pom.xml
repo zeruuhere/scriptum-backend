@@ -48,6 +48,27 @@
         -->
         <jacoco.line.minimum>0.95</jacoco.line.minimum>
         <jacoco.branch.minimum>0.80</jacoco.branch.minimum>
+
+        <!--
+            The three test layers, in the order the Maven lifecycle runs them:
+            unit tests (*Test) under Surefire in `test`, then integration tests
+            (*IT) and system tests (*SystemIT) under Failsafe in
+            `integration-test`. Each can be skipped on its own so a pipeline can
+            report one layer per step without re-running the others.
+        -->
+        <skipUnitTests>false</skipUnitTests>
+        <skipIntegrationTests>false</skipIntegrationTests>
+
+        <!--
+            System tests are off by default and turned on by the `system-tests`
+            profile. They boot Tomcat on a real port and are the slowest layer,
+            so `mvn verify` stays usable during development and the pipeline
+            stage that runs them is the only thing that pays for them.
+        -->
+        <skipSystemTests>true</skipSystemTests>
+
+        <!-- Set by jacoco:prepare-agent-integration; empty when jacoco is skipped. -->
+        <failsafeArgLine/>
     </properties>
 
     <dependencies>
@@ -177,6 +198,87 @@
                     </annotationProcessorPaths>
                 </configuration>
             </plugin>
+            <!-- Unit tests: *Test, no Spring context or a mocked one, always fast. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <skipTests>${skipUnitTests}</skipTests>
+                    <includes>
+                        <include>**/*Test.java</include>
+                    </includes>
+                    <excludes>
+                        <!-- A composed annotation, not a test class. -->
+                        <exclude>**/WebLayerTest.java</exclude>
+                    </excludes>
+                </configuration>
+            </plugin>
+
+            <!--
+                Integration and system tests, both under Failsafe in the
+                `integration-test` phase. Two executions rather than one, so a
+                pipeline can run and report them separately, and so the slower
+                system tests only start once integration has passed. Failsafe
+                executions run in declaration order.
+            -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-failsafe-plugin</artifactId>
+                <configuration>
+                    <argLine>${failsafeArgLine}</argLine>
+                </configuration>
+                <executions>
+                    <!--
+                        spring-boot-starter-parent already binds an execution
+                        called `default` with Failsafe's own includes. Left
+                        alone, it runs every IT a second time before the two
+                        executions below.
+                    -->
+                    <execution>
+                        <id>default</id>
+                        <phase>none</phase>
+                    </execution>
+                    <execution>
+                        <id>integration-tests</id>
+                        <goals>
+                            <goal>integration-test</goal>
+                        </goals>
+                        <configuration>
+                            <skipTests>${skipIntegrationTests}</skipTests>
+                            <includes>
+                                <include>**/*IT.java</include>
+                            </includes>
+                            <excludes>
+                                <exclude>**/*SystemIT.java</exclude>
+                            </excludes>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <id>system-tests</id>
+                        <goals>
+                            <goal>integration-test</goal>
+                        </goals>
+                        <configuration>
+                            <skipTests>${skipSystemTests}</skipTests>
+                            <includes>
+                                <include>**/*SystemIT.java</include>
+                            </includes>
+                        </configuration>
+                    </execution>
+                    <!--
+                        Failsafe records failures instead of throwing, so that
+                        post-integration-test cleanup always runs. This is the
+                        goal that turns a recorded failure into a failed build.
+                    -->
+                    <execution>
+                        <id>verify</id>
+                        <goals>
+                            <goal>verify</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+
             <plugin>
                 <groupId>org.jacoco</groupId>
                 <artifactId>jacoco-maven-plugin</artifactId>
@@ -200,18 +302,59 @@
                     </excludes>
                 </configuration>
                 <executions>
+                    <!--
+                        Two agents writing two files: Surefire's run and
+                        Failsafe's. They are merged before the report, because
+                        coverage of a class is the union of what every layer
+                        exercised, and half the integration coverage would
+                        otherwise vanish from the gate below.
+                    -->
                     <execution>
                         <id>jacoco-prepare-agent</id>
                         <goals>
                             <goal>prepare-agent</goal>
                         </goals>
+                        <configuration>
+                            <destFile>${project.build.directory}/jacoco-unit.exec</destFile>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <id>jacoco-prepare-agent-integration</id>
+                        <goals>
+                            <goal>prepare-agent-integration</goal>
+                        </goals>
+                        <configuration>
+                            <destFile>${project.build.directory}/jacoco-it.exec</destFile>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <id>jacoco-merge</id>
+                        <phase>post-integration-test</phase>
+                        <goals>
+                            <goal>merge</goal>
+                        </goals>
+                        <configuration>
+                            <fileSets>
+                                <fileSet>
+                                    <directory>${project.build.directory}</directory>
+                                    <includes>
+                                        <include>jacoco-unit.exec</include>
+                                        <include>jacoco-it.exec</include>
+                                    </includes>
+                                </fileSet>
+                            </fileSets>
+                            <destFile>${project.build.directory}/jacoco.exec</destFile>
+                        </configuration>
                     </execution>
                     <execution>
                         <id>jacoco-report</id>
-                        <phase>test</phase>
+                        <phase>post-integration-test</phase>
                         <goals>
                             <goal>report</goal>
                         </goals>
+                        <configuration>
+                            <dataFile>${project.build.directory}/jacoco.exec</dataFile>
+                        </configuration>
                     </execution>
                     <execution>
                         <id>jacoco-check</id>
@@ -220,6 +363,7 @@
                             <goal>check</goal>
                         </goals>
                         <configuration>
+                            <dataFile>${project.build.directory}/jacoco.exec</dataFile>
                             <rules>
                                 <rule>
                                     <element>BUNDLE</element>
@@ -243,5 +387,19 @@
             </plugin>
         </plugins>
     </build>
+
+    <profiles>
+        <!--
+            Adds the system test layer on top of the others:
+            `./mvnw -Psystem-tests verify` runs unit, integration and system.
+            Used by the system stage of the CI pipeline.
+        -->
+        <profile>
+            <id>system-tests</id>
+            <properties>
+                <skipSystemTests>false</skipSystemTests>
+            </properties>
+        </profile>
+    </profiles>
 
 </project>

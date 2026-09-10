@@ -25,7 +25,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 @DataJpaTest
 @DisplayName("INotesJpaRepository derived queries")
-class INotesJpaRepositoryTest {
+class INotesJpaRepositoryIT {
 
     @Autowired
     private TestEntityManager entityManager;

@@ -15,7 +15,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 @DataJpaTest
 @DisplayName("IVerificationTokenRepository derived queries")
-class IVerificationTokenRepositoryTest {
+class IVerificationTokenRepositoryIT {
 
     @Autowired
     private TestEntityManager entityManager;

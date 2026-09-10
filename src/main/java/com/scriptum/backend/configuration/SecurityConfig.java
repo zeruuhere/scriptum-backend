@@ -39,7 +39,11 @@ public class SecurityConfig {
             "/api/auth/**",
             "/swagger-ui/**",
             "/swagger-ui.html",
-            "/api-docs/**"
+            "/api-docs/**",
+            // Spring forwards an unhandled exception to /error as a fresh
+            // dispatch, which carries no authentication. Without this, every
+            // 500 reaches the caller as a 401 and the real cause is invisible.
+            "/error"
     };
 
     @Bean
